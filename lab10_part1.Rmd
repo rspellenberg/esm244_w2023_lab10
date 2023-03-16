@@ -1,0 +1,154 @@
+---
+title: "lab10_part1"
+author: "R. Spellenberg"
+date: "2023-03-16"
+output: html_document
+---
+
+```{r setup, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+library(tidyverse)
+library(jsonlite)
+library(here)
+library(sf)
+library(terra)
+library(rnaturalearth)
+```
+
+## Set up API key
+
+```{r}
+api_key <- '9bb4facb6d23f48efbf424bb05c0c1ef1cf6f468393bc745d42179ac4aca5fee'
+```
+
+## Access API dataset version
+
+```{r}
+domain_name <- 'http://apiv3.iucnredlist.org'
+version_end <- 'api/v3/version'
+
+### makes a web address
+version_url <- file.path(domain_name, version_end)
+
+###makes it into something R can use
+api_version <- jsonlite::fromJSON(version_url)
+```
+
+## How many species are in the IUCN dataset?
+```{r}
+count_stem <- 'api/v3/speciescount?token=%s'
+
+### subs in our key for the token
+count_end <- sprintf(count_stem, api_key)
+
+count_url <- file.path(domain_name, count_end)
+
+spp_count <- jsonlite::fromJSON(count_url)
+
+as.integer(spp_count$count)
+```
+
+## Get a page of results
+```{r}
+page_stem <- 'api/v3/species/page/%s?token=%s'
+page_end <- sprintf(page_stem, 1, api_key)
+page_url <- file.path(domain_name, page_end)
+spp_page1 <- fromJSON(page_url)
+spp_df <- spp_page1$result %>% 
+  mutate(category = factor(category, levels = c('LC', 'NT', 'VU', 'EN', 'CR', 'EX'))) %>% 
+  filter(!is.na(category))
+
+ggplot(spp_df) + 
+  geom_bar(aes(x = category, fill = category)) +
+  scale_fill_brewer(palette = 'RdYlGn', direction = -1) +
+  theme_classic()
+```
+
+## Get current and historic assessment information for a particular species
+```{r}
+hist_stem <- 'api/v3/species/history/name/%s?token=%s'
+spp <- 'Dermochelys%20coriacea' ### %20 represents a space
+hist_end <- sprintf(hist_stem, spp, api_key)
+
+hist_url <- file.path(domain_name, hist_end)
+spp_hist <- fromJSON(hist_url)
+spp_hist_df <- spp_hist$results
+
+### come back and practice on own time
+
+```
+
+## Map threatened species
+```{r}
+iucn_spp_info <- read_csv(here('data/iucn_marine_spp_info_2021-3.csv'))
+iucn_spp_info$cat %>%  unique()
+
+cell_ids <- read_csv(here('data/am_latlong.csv'))
+spp_cells <- read_csv(here('data/am_spp_cells.csv'))
+spp_ids <- read_csv(here('data/am_spp_ids.csv'))
+
+spp_risk_cells <- spp_cells %>% 
+  inner_join(cell_ids, by = 'loiczid') %>% ###any rows that don't match will get dropped
+  inner_join(spp_ids, by = 'am_sid') %>% 
+  inner_join(iucn_spp_info, by = c('binomial' = 'sciname'))
+
+threatened_pct_cells <- spp_risk_cells %>% 
+  filter(prob >= 0.5) %>% 
+  mutate(threatened = (tolower(cat) %in% c('vu', 'en', 'cr'))) %>% 
+  filter(cat != 'dd') %>% 
+  group_by(lon, lat) %>% 
+  summarize(pct_threatened = sum(threatened)/n())
+```
+
+## Now put this into spatial information
+```{r}
+spp_risk_rast <- terra::rast(threatened_pct_cells, type = 'xyz', crs = 'epsg:4326')
+
+plot(spp_risk_rast)
+```
+
+## now with ggplot
+```{r}
+## can go from rast to df
+spp_risk_rast_df <- spp_risk_rast %>% 
+  as.data.frame(xy = TRUE)
+
+
+p <- ggplot(threatened_pct_cells) +
+  geom_raster(aes(x = lon, y = lat, fill = pct_threatened)) +
+  scale_fill_viridis_c(direction = 1) +
+  coord_sf()
+p
+```
+
+## fancy it up
+```{r}
+### lay over a shp
+land_sf <- rnaturalearth::ne_countries(scale = 50, ### 10 =super fine resolution, 110 v zoomed out
+                                       country = c('united states of america', 'mexico'),
+                                       returnclass = 'sf')
+
+land_sf_cropped <- land_sf %>% 
+  st_crop(spp_risk_rast) 
+
+# plot(land_sf_cropped %>% select(geometry))
+
+p2 <- p +
+  geom_sf(data = land_sf_cropped,
+          fill = 'gray80', color = 'red',
+          size = 0.5, alpha = 0.5) +
+  theme_void()
+p2
+  
+```
+
+
+
+
+
+
+
+
+
+
