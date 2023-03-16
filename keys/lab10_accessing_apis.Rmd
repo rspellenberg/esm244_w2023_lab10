@@ -1,7 +1,7 @@
 ---
 title: "Working with APIs in R"
 author: "Casey O'Hara"
-date: "3/9/2022"
+date: "3/9/2023"
 output: html_document
 ---
 
@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 
 library(sf)
-library(raster)
+library(terra)
 library(rnaturalearth)
 library(tidyverse)
 library(jsonlite)
@@ -33,9 +33,13 @@ Also, check out https://shiny.rstudio.com/articles/shinyapps.html to deploy your
     - e.g., `IUCN_KEY=12345678`
 - second: accessing API key
     - now in your code, you can access this key with `api_key <- Sys.getenv('IUCN_KEY')`
+- if no personal API key yet, use the API demo one: 
+    - 9bb4facb6d23f48efbf424bb05c0c1ef1cf6f468393bc745d42179ac4aca5fee
 
 ```{r}
 api_key <- Sys.getenv('IUCN_KEY')
+
+api_key <- '9bb4facb6d23f48efbf424bb05c0c1ef1cf6f468393bc745d42179ac4aca5fee'
 ```
 
 ### Get the IUCN Redlist version: look up the endpoint on the reference!
@@ -86,16 +90,19 @@ spp_df <- spp_page1$result %>%
 
 ggplot(spp_df) +
   geom_bar(aes(x = category, fill = category)) +
-  scale_fill_brewer(palette = 'RdYlGn', direction = -1)
+  scale_fill_brewer(palette = 'RdYlGn', direction = -1) +
+  theme_minimal()
 ```
 
 ### Get current and historic assessment info for a species
 
 historic assessments endpoint: `/api/v3/species/history/name/:name?token='YOUR TOKEN'`
 
+Note, spaces won't work in a URL - need to replace them with `%20`
+
 ```{r}
 hist_stem <- 'api/v3/species/history/name/%s?token=%s'
-spp <- 'Dermochelys coriacea'
+spp <- 'Dermochelys%20coriacea'
 hist_end <- sprintf(hist_stem, spp, api_key)
 hist_url <- file.path(domain_name, hist_end)
 
@@ -119,6 +126,10 @@ spp_narr <- fromJSON(narr_url)$result
 
 spp_narr$threats
 ```
+
+
+Note that the IUCN Red List site literally just calls its own API to build each page when you type in a species name!
+
 
 ## Map threatened status
 
@@ -159,8 +170,7 @@ threatened_pct_cells <- spp_risk_cells %>%
 If we wished to do spatial analysis with this lat-long map of percent threatened species, we can convert our grid to a raster.  Don't forget to tell it our CRS, which since we are using lat-long data, we can use WGS84, EPSG code 4326.
 
 ```{r}
-spp_risk_rast <- rasterFromXYZ(threatened_pct_cells)
-crs(spp_risk_rast) <- 4326
+spp_risk_rast <- rast(threatened_pct_cells, type = 'xyz', crs = 'epsg:4326')
 
 plot(spp_risk_rast)
 ```
@@ -172,12 +182,13 @@ plot(spp_risk_rast)
 ```{r}
 spp_risk_rast_df <- spp_risk_rast %>%
   as.data.frame(xy = TRUE)
-### Why does this have different length than threatened_pct_cells?
 
-ggplot(threatened_pct_cells) +
+p <- ggplot(threatened_pct_cells) +
   geom_raster(aes(x = lon, y = lat, fill = pct_threatened)) +
   scale_fill_viridis_c() +
   coord_sf()
+
+p
 ```
 
 ### Let's finalize our map by overlaying a continent shape
@@ -190,17 +201,19 @@ Note, we can access individual countries, or continents, or states; but we proba
 land_sf <- rnaturalearth::ne_countries(scale = 50, ### start with 110
                                        country = c('united states of america', 'mexico'),
                                        returnclass = 'sf')
+
+### if necessary: install.packages("rnaturalearthdata")
+
 # plot(land_sf %>% select(geometry))
 # st_crs(land_sf)
 
 land_sf_cropped <- land_sf %>%
   st_crop(spp_risk_rast)
 
-ggplot() +
-  geom_raster(data = threatened_pct_cells, aes(x = lon, y = lat, fill = pct_threatened)) +
-  geom_sf(data = land_sf_cropped, fill = 'grey80', color = 'grey40', alpha = .5) +
-  scale_fill_viridis_c() +
-  coord_sf() +
+p <- p + geom_sf(data = land_sf_cropped, 
+                 fill = 'grey80', color = 'yellow', size = 1, alpha = .5) +
   theme_void()
+
+p
 ```
 
